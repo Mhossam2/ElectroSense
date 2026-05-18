@@ -43,7 +43,7 @@ It also enables users to design circuits virtually and map real-world components
 
 ## 🛠️ Tech Stack
 - **Frontend:** React, TypeScript  
-- **Hardware:** (ESP32)  
+- **Hardware:** (Arduino Nano)  
 - **Communication:** (UART / WiFi / Bluetooth)  
 - **Concepts:** Embedded Systems, Signal Processing, Circuit Analysis  
 
