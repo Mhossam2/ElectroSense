@@ -220,7 +220,7 @@ A built-in educational reference that turns the tester into a learning tool, aim
 
 ---
 
-## 📸 Gallery
+<!-- ## 📸 Gallery
 
 > Add photos here to show the hardware and app side by side
 
@@ -230,7 +230,7 @@ A built-in educational reference that turns the tester into a learning tool, aim
 | ![PCB](docs/images/pcb.jpg) | ![Dashboard](docs/images/dashboard.png) | ![Builder](docs/images/builder.png) |
 -->
 
----
+
 
 ## ⚙️ Getting Started
 
