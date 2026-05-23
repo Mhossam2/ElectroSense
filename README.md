@@ -2,9 +2,6 @@
 
 **Embedded Hardware Tester + Mobile Companion App**
 
-> ECE-315: Measurements & Instrumentation — Nile University, Spring 2026  
-> Mohanned Hossam Issa · Abdelrhman Alaa
-
 ---
 
 ## 🚀 Overview
@@ -168,7 +165,7 @@ SI prefix parsing is handled on the app side — the firmware sends `10.0k` inst
 **History & Compare** — every reading can be saved with a single tap. Saved readings appear in a history list where you can compare batches (e.g., testing a reel of resistors for consistency) or review previous sessions.
 
 <!-- TODO: Add dashboard screenshot -->
-![Dashboard](docs/images/dashboard.jpg)
+![Dashboard](docs/images/dashboard.png)
 
 ---
 
@@ -220,7 +217,7 @@ A built-in educational reference that turns the tester into a learning tool, aim
 
 ---
 
-## 📸 Gallery
+<!-- ## 📸 Gallery
 
 > Add photos here to show the hardware and app side by side
 
@@ -230,7 +227,7 @@ A built-in educational reference that turns the tester into a learning tool, aim
 | ![PCB](docs/images/pcb.jpg) | ![Dashboard](docs/images/dashboard.png) | ![Builder](docs/images/builder.png) |
 -->
 
----
+
 
 ## ⚙️ Getting Started
 
@@ -266,4 +263,3 @@ Flash `firmware/smart_lcr_lab.ino` to the Arduino Nano via Arduino IDE. Ensure b
 ## 👥 Authors
 
 **Mohanned Hossam Issa** · **Abdelrhman Alaa**  
-ECE-315: Measurements & Instrumentation — Nile University, Spring 2026
