@@ -193,7 +193,7 @@ This bridges the gap between a paper schematic and a physical build, giving you 
 > Match rate: **>95%** for 5% resistors and 10% capacitors
 
 <!-- TODO: Add circuit builder screenshot -->
-![Circuit Builder](docs/images/circuitbuilder.png)
+![Circuit Builder](docs/images/circuit_builder.png)
 
 ---
 
@@ -213,7 +213,7 @@ A built-in educational reference that turns the tester into a learning tool, aim
 **Difficulty tiers** — components are organized into Beginner, Intermediate, and Advanced paths, so students can work through them progressively rather than being overwhelmed by specs upfront.
 
 <!-- TODO: Add Learn module screenshot -->
-![Learn Module](docs/images/learn.png)
+![Learn Module](docs/images/learn_page.png)
 
 ---
 
