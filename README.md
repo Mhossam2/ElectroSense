@@ -168,7 +168,7 @@ SI prefix parsing is handled on the app side — the firmware sends `10.0k` inst
 **History & Compare** — every reading can be saved with a single tap. Saved readings appear in a history list where you can compare batches (e.g., testing a reel of resistors for consistency) or review previous sessions.
 
 <!-- TODO: Add dashboard screenshot -->
-![Dashboard](docs/images/dashboard.jpg)
+![Dashboard](docs/images/dashboard.png)
 
 ---
 
