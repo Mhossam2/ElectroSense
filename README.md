@@ -2,9 +2,6 @@
 
 **Embedded Hardware Tester + Mobile Companion App**
 
-> ECE-315: Measurements & Instrumentation — Nile University, Spring 2026  
-> Mohanned Hossam Issa · Abdelrhman Alaa
-
 ---
 
 ## 🚀 Overview
@@ -266,4 +263,3 @@ Flash `firmware/smart_lcr_lab.ino` to the Arduino Nano via Arduino IDE. Ensure b
 ## 👥 Authors
 
 **Mohanned Hossam Issa** · **Abdelrhman Alaa**  
-ECE-315: Measurements & Instrumentation — Nile University, Spring 2026
