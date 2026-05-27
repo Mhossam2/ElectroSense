@@ -71,17 +71,17 @@ See the [Web App](#-web-app) and [Backend](#-backend) sections below for full de
                    │  Frame: TYPE,VALUE,UNIT,SECONDARY
                    │  e.g. "RESISTOR,10.0k,Ω,E12"
 ┌──────────────────▼──────────────────────────────────┐
-│                  Web App (React 18 / TS)             │
+│                  Web App (React 18 / TS)            │
 │  Dashboard · Circuit Builder · Learn · History      │
 └──────────────────┬──────────────────────────────────┘
                    │  REST API  (Bearer JWT)
 ┌──────────────────▼──────────────────────────────────┐
-│              Backend (Node.js / Express / TS)        │
+│              Backend (Node.js / Express / TS)       │
 │  /api/auth · /api/circuits · /api/measurements      │
 └──────────────────┬──────────────────────────────────┘
                    │  Prisma ORM
 ┌──────────────────▼──────────────────────────────────┐
-│           Database (SQLite dev / swappable)          │
+│           Database (SQLite dev / swappable)         │
 │  User · Circuit · Measurement                       │
 └─────────────────────────────────────────────────────┘
 ```
