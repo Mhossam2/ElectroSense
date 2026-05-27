@@ -23,4 +23,9 @@ dist-ssr
 *.sln
 *.sw?
 
+# Ignore server environment variables
 server/.env
+
+# Ignore SQLite local database and temporary journal files
+server/prisma/dev.db
+server/prisma/dev.db-journal
