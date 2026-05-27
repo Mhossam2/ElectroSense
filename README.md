@@ -8,7 +8,7 @@
 
 Smart LCR Lab is a custom-built hardware–software system that automatically identifies and measures electronic components — resistors, capacitors, inductors, diodes, BJTs, and MOSFETs — and streams live results to a React web app over Bluetooth Low Energy.
 
-The companion app goes beyond a simple readout: it includes a real-time dashboard, an interactive circuit builder with Hardware-in-the-Loop verification, a signal generator, and a student-facing educational module.
+The companion app goes beyond a simple readout: it includes a real-time dashboard, an interactive circuit builder with Hardware-in-the-Loop verification, a signal generator, and a student-facing educational module. A backend server with user accounts enables persistent circuit storage and synchronized measurement history across sessions.
 
 <!-- TODO: Add photo of the physical device here -->
 ![Smart LCR Lab Device](docs/images/device-overview.png)
@@ -22,6 +22,7 @@ Standard bench tools leave three key gaps for engineers and students:
 - **Unmarked components** — SMD parts and worn labels make identification impossible by sight alone
 - **Manual mode-switching** — multimeters require you to pre-select modes, slowing down debug and assembly
 - **No educational context** — static readings give no behavioral insight or schematic correlation
+- **No persistence** — measurements and circuit designs are lost when the session ends
 
 ---
 
@@ -48,7 +49,13 @@ Standard bench tools leave three key gaps for engineers and students:
 - Educational Learn module with context-aware component cards
 - Save, compare, and review measurement history
 
-See the [Web App](#-web-app) section below for a full breakdown of each module.
+### Backend & Accounts
+- User registration and login with JWT authentication
+- Cloud-persisted circuit projects — save, load, rename, and delete circuits across sessions
+- Measurement history stored per user, filterable by component type or circuit
+- Circuits can optionally be linked to a measurement session for traceability
+
+See the [Web App](#-web-app) and [Backend](#-backend) sections below for full details.
 
 ---
 
@@ -66,6 +73,16 @@ See the [Web App](#-web-app) section below for a full breakdown of each module.
 ┌──────────────────▼──────────────────────────────────┐
 │                  Web App (React 18 / TS)             │
 │  Dashboard · Circuit Builder · Learn · History      │
+└──────────────────┬──────────────────────────────────┘
+                   │  REST API  (Bearer JWT)
+┌──────────────────▼──────────────────────────────────┐
+│              Backend (Node.js / Express / TS)        │
+│  /api/auth · /api/circuits · /api/measurements      │
+└──────────────────┬──────────────────────────────────┘
+                   │  Prisma ORM
+┌──────────────────▼──────────────────────────────────┐
+│           Database (SQLite dev / swappable)          │
+│  User · Circuit · Measurement                       │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -82,6 +99,7 @@ See the [Web App](#-web-app) section below for a full breakdown of each module.
 4. **Display** — value shown on TFT LCD with component type and unit
 5. **Transmit** — HM-10 sends a typed BLE packet to the mobile app in <500ms
 6. **Visualize** — app dashboard categorizes the reading and optionally matches it against your circuit schematic
+7. **Persist** — authenticated users have readings saved to the backend and circuits synced across sessions
 
 ---
 
@@ -136,13 +154,17 @@ Validated against calibrated bench instruments:
 | PCB Design | KiCad |
 | Frontend | React 18, TypeScript, Tailwind CSS |
 | Connectivity | Web Bluetooth API |
+| Backend | Node.js, Express, TypeScript |
+| ORM | Prisma |
+| Database | SQLite (dev) — swap datasource for PostgreSQL in production |
+| Auth | JWT (30-day tokens, bcrypt password hashing) |
 | Reporting | PptxGenJS |
 
 ---
 
 ## 🖥️ Web App
 
-The companion web app has four distinct modules, each accessible from the top navigation.
+The companion web app has four distinct modules, each accessible from the top navigation. Sign up or log in to enable cloud sync for circuits and measurement history.
 
 ---
 
@@ -162,7 +184,7 @@ SI prefix parsing is handled on the app side — the firmware sends `10.0k` inst
 
 **Generate Mode** — reverses the data flow. Instead of reading from hardware, you set a PWM frequency and duty cycle in the UI and the app sends the command back to the Arduino over BLE. The hardware then drives the PWM output accordingly — useful for testing RC filters or driving components under controlled conditions.
 
-**History & Compare** — every reading can be saved with a single tap. Saved readings appear in a history list where you can compare batches (e.g., testing a reel of resistors for consistency) or review previous sessions.
+**History & Compare** — every reading can be saved with a single tap. Authenticated users have readings persisted to the backend (up to 200 most recent, filterable by type or circuit). Saved readings appear in a history list where you can compare batches (e.g., testing a reel of resistors for consistency) or review previous sessions.
 
 <!-- TODO: Add dashboard screenshot -->
 ![Dashboard](docs/images/dashboard.png)
@@ -178,6 +200,8 @@ A schematic-style canvas for designing circuits digitally and verifying them aga
 - Wire components together to build schematics
 - Supports 50+ simultaneously placed parts with no performance degradation
 - Zoom from 0.5× to 3× with correct snap and routing at all levels
+
+**Cloud Circuit Storage** — authenticated users can save named circuit projects to the backend. The canvas state (components, wires, and junctions) is serialized and stored per user. Duplicate names are handled automatically with a counter suffix (e.g. `My Circuit (2)`). The toolbar exposes Save, Load, and Delete actions backed by the Circuits API.
 
 **Hardware-in-the-Loop Verification**
 This is the feature that sets the circuit builder apart from a regular schematic editor. When you measure a physical component with the device, the BLE payload is forwarded to the builder. A *Best Match* algorithm compares the measured value against every unverified component in your schematic and surfaces the closest match. You then **Accept** or **Reject** the suggestion.
@@ -217,17 +241,94 @@ A built-in educational reference that turns the tester into a learning tool, aim
 
 ---
 
-<!-- ## 📸 Gallery
+## 🗄️ Backend
 
-> Add photos here to show the hardware and app side by side
+The backend lives in `server/` and is a Node.js + Express REST API written in TypeScript. It uses **Prisma** as the ORM and ships with a SQLite database for development; switching to PostgreSQL (or any other Prisma-supported database) requires only a one-line datasource change in `schema.prisma`.
 
-<!-- 
-| Hardware PCB | Live Dashboard | Circuit Builder |
+### Authentication
+
+Passwords are hashed with **bcrypt** (12 rounds). On successful register or login the server returns a signed **JWT** (30-day expiry) which the frontend stores in `localStorage` and attaches as a `Bearer` token on every subsequent request. The `requireAuth` middleware validates the token and injects `userId` into the request for downstream route handlers.
+
+| Endpoint | Method | Description |
 |---|---|---|
-| ![PCB](docs/images/pcb.jpg) | ![Dashboard](docs/images/dashboard.png) | ![Builder](docs/images/builder.png) |
--->
+| `/api/auth/register` | POST | Create a new account — body: `{ email, password }` (min 8 chars) |
+| `/api/auth/login` | POST | Authenticate — returns `{ token, user }` |
+| `/api/health` | GET | Server health check |
 
+### Circuits API
 
+All routes require a valid Bearer token. Each circuit stores its canvas state as three separate JSON blobs (`components`, `wires`, `junctions`) serialized to strings in the database. The API deserializes them before responding so the frontend always receives parsed arrays. Duplicate circuit names per user are resolved automatically with a `(2)`, `(3)` … counter suffix.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/circuits` | GET | List all circuits for the current user (id, name, timestamps — no canvas data) |
+| `/api/circuits/:id` | GET | Get one circuit with full canvas data |
+| `/api/circuits` | POST | Create a new circuit — body: `{ name?, components?, wires?, junctions? }` |
+| `/api/circuits/:id` | PUT | Update name and/or canvas data (partial updates supported) |
+| `/api/circuits/:id` | DELETE | Delete a circuit (204 No Content) |
+
+### Measurements API
+
+All routes require a valid Bearer token. Results are capped at **200 most recent** entries and can be filtered by component type or associated circuit. A measurement can optionally be linked to a circuit via `circuitId` for traceability (e.g. "all resistors measured during verification of Circuit X").
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/measurements` | GET | List measurements — optional query params: `?type=resistor`, `?circuitId=<id>` |
+| `/api/measurements` | POST | Save a BLE reading — body: `{ type?, values?, pinOrder?, signalFrequency?, externalVoltage?, circuitId? }` |
+
+---
+
+## 🗃️ Database Schema
+
+Managed by **Prisma**. The schema is in `server/prisma/schema.prisma`.
+
+```prisma
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  passwordHash String
+  createdAt    DateTime      @default(now())
+
+  circuits     Circuit[]
+  measurements Measurement[]
+}
+
+model Circuit {
+  id         String   @id @default(cuid())
+  userId     String
+  name       String   @default("Untitled circuit")
+
+  // Canvas state — serialised JSON, stored as String in SQLite
+  components String   @default("[]")
+  wires      String   @default("[]")
+  junctions  String   @default("[]")
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  measurements Measurement[]
+}
+
+model Measurement {
+  id              String   @id @default(cuid())
+  userId          String
+  circuitId       String?  // optional link to a Circuit
+
+  type            String?  // e.g. "resistor", "capacitor"
+  values          String?  // JSON string, e.g. '{"r":"10.0k"}'
+  pinOrder        String?  // e.g. "123=BCE" for BJTs
+  signalFrequency Float?
+  externalVoltage Float?
+
+  timestamp DateTime @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  circuit Circuit? @relation(fields: [circuitId], references: [id], onDelete: SetNull)
+}
+```
+
+---
 
 ## ⚙️ Getting Started
 
@@ -235,13 +336,44 @@ A built-in educational reference that turns the tester into a learning tool, aim
 - Node.js 18+
 - A Chromium-based browser (required for Web Bluetooth API)
 
+### Backend
+```bash
+cd server
+cp .env.example .env        # edit JWT_SECRET and DATABASE_URL if needed
+npm install
+npm run db:push             # creates the SQLite database and applies the schema
+npm run dev                 # starts on http://localhost:3001
+```
+
 ### Frontend
 ```bash
 npm install
-npm run dev
+npm run dev                 # starts on http://localhost:5173
 ```
 
-Open `http://localhost:5173`, enable Bluetooth, and pair with the HM-10 module on the device.
+Open `http://localhost:5173`, register an account, enable Bluetooth, and pair with the HM-10 module on the device.
+
+### Environment Variables (`server/.env`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | `file:./prisma/dev.db` | Prisma database connection string |
+| `JWT_SECRET` | *(set in .env)* | Secret used to sign JWTs — change before deploying |
+| `PORT` | `3001` | Port the Express server listens on |
+| `FRONTEND_URL` | `http://localhost:5173` | Allowed origin for CORS |
+
+### Switching to PostgreSQL
+
+Change the datasource block in `server/prisma/schema.prisma`:
+
+```prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+```
+
+Then update `DATABASE_URL` in `.env` to a PostgreSQL connection string and re-run `npm run db:push`.
 
 ### Hardware
 Flash `firmware/smart_lcr_lab.ino` to the Arduino Nano via Arduino IDE. Ensure baud rate matches the HM-10 configuration (default: 9600).
@@ -251,7 +383,7 @@ Flash `firmware/smart_lcr_lab.ino` to the Arduino Nano via Arduino IDE. Ensure b
 ## 🚧 Future Work
 
 - Native mobile app (offline support)
-- User accounts with cloud-synced measurement history
+- OAuth login (Google, GitHub)
 - True inductance measurement via AC signal injection
 - Circuit simulator mode (beyond schematic editor)
 - Push-pull PWM driver for hardware output
@@ -262,4 +394,4 @@ Flash `firmware/smart_lcr_lab.ino` to the Arduino Nano via Arduino IDE. Ensure b
 
 ## 👥 Authors
 
-**Mohanned Hossam Issa** · **Abdelrhman Alaa**  
+**Mohanned Hossam Issa** · **Abdelrhman Alaa**
