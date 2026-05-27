@@ -10,8 +10,10 @@ import {
   circuitStore, useCircuitStore,
   type PlacedComponent, type Pin, type Wire,
 } from "@/hooks/use-circuit-store";
-import { useBleFeed } from "@/hooks/use-ble-feed";
+import { useBle } from "@/contexts/BleContext";
 import type { BleReadPayload, ParsedPinOrder } from "@/hooks/use-ble-feed";
+import { circuitsApi, type Circuit } from "@/lib/api";
+import { FolderOpen, Loader2 } from "lucide-react";
 import { findBestMatch, formatSI, type MatchResult } from "@/lib/match-measurement";
 
 // ─── Constants ───────────────────────────────────────────────
@@ -26,16 +28,25 @@ const PIN_OUT = GRID * 2;        // 40 — distance from comp center to L/R pin 
 const PIN_OUT_V = GRID;          // 20 — distance from comp center to T/B pin (pin sits exactly on comp edge)
 const MAX_PAN = 4000;            // hard pan limit so user can't run away
 
+// Component palette — types must match FAMILY_TO_TYPE keys in match-measurement.ts
+// defaultValue must be parseable by parseValue() for matching to work
+// (e.g. "10kΩ" parses to 10000, "2N2222" is just a label — no matching for BJT by name)
 const componentParts = [
-  { name: "R", label: "Resistor", color: "bg-resistor", textColor: "text-resistor", defaultValue: "10kΩ" },
-  { name: "C", label: "Capacitor", color: "bg-capacitor", textColor: "text-capacitor", defaultValue: "100nF" },
-  { name: "L", label: "Inductor", color: "bg-inductor", textColor: "text-inductor", defaultValue: "10µH" },
-  { name: "D", label: "Diode", color: "bg-diode", textColor: "text-diode", defaultValue: "1N4148" },
-  { name: "Q", label: "BJT", color: "bg-bjt", textColor: "text-bjt", defaultValue: "2N2222" },
-  { name: "M", label: "MOSFET", color: "bg-mosfet", textColor: "text-mosfet", defaultValue: "IRF540" },
-  { name: "GND", label: "Ground", color: "bg-muted-foreground", textColor: "text-muted-foreground", defaultValue: "" },
-  { name: "V+", label: "VCC", color: "bg-diode", textColor: "text-diode", defaultValue: "5V" },
-  { name: "J", label: "Junction", color: "bg-primary", textColor: "text-primary", defaultValue: "" },
+  // ── Passives ─────────────────────────────────────────────────────────────
+  { name: "R",   label: "Resistor",  color: "bg-resistor",   textColor: "text-resistor",   defaultValue: "10kΩ",   unit: "Ω",  primaryKey: "r"   },
+  { name: "C",   label: "Capacitor", color: "bg-capacitor",  textColor: "text-capacitor",  defaultValue: "100nF",  unit: "F",  primaryKey: "c"   },
+  { name: "L",   label: "Inductor",  color: "bg-inductor",   textColor: "text-inductor",   defaultValue: "10µH",   unit: "H",  primaryKey: "l"   },
+  // ── Semiconductors ────────────────────────────────────────────────────────
+  { name: "D",   label: "Diode",     color: "bg-diode",      textColor: "text-diode",      defaultValue: "600mV",  unit: "V",  primaryKey: "vf"  },
+  { name: "Q",   label: "BJT",       color: "bg-bjt",        textColor: "text-bjt",        defaultValue: "100",    unit: "",   primaryKey: "hfe" },
+  { name: "M",   label: "MOSFET",    color: "bg-mosfet",     textColor: "text-mosfet",     defaultValue: "2100mV", unit: "V",  primaryKey: "vth" },
+  { name: "J",   label: "JFET",      color: "bg-jfet",       textColor: "text-jfet",       defaultValue: "-1420mV",unit: "V",  primaryKey: "vgs" },
+  { name: "SCR", label: "Thyristor", color: "bg-thyristor",  textColor: "text-thyristor",  defaultValue: "800mV",  unit: "V",  primaryKey: "vgt" },
+  { name: "TRI", label: "Triac",     color: "bg-thyristor",  textColor: "text-thyristor",  defaultValue: "600mV",  unit: "V",  primaryKey: "vgt" },
+  // ── Schematic helpers (not measurable — for circuit drawing only) ─────────
+  { name: "GND", label: "Ground",    color: "bg-muted-foreground", textColor: "text-muted-foreground", defaultValue: "", unit: "", primaryKey: "" },
+  { name: "V+",  label: "VCC",       color: "bg-diode",      textColor: "text-diode",      defaultValue: "5V",     unit: "V",  primaryKey: "" },
+  { name: "JP",  label: "Junction",  color: "bg-primary",    textColor: "text-primary",    defaultValue: "",       unit: "",   primaryKey: "" },
 ];
 
 type Tool = "move" | "pan" | "wire" | "delete" | "rotate";
@@ -53,7 +64,7 @@ const toolDefs: { id: Tool; icon: any; label: string; shortcut: string }[] = [
 ];
 
 const ADD_SHORTCUTS: Record<string, string> = {
-  r: "R", c: "C", l: "L", v: "V+", g: "GND", d: "D", b: "Q", t: "M", j: "J",
+  r: "R", c: "C", l: "L", v: "V+", g: "GND", d: "D", b: "Q", t: "M", f: "J", s: "SCR", x: "TRI", n: "JP",
 };
 
 let idCounter = Date.now();
@@ -63,23 +74,21 @@ const wireGenId = () => `wire-${++idCounter}`;
 // ─── Helpers ─────────────────────────────────────────────────
 // Pin layouts use multiples of GRID so every pin lands on a snap dot.
 const PIN_LAYOUTS: Record<string, { side: Pin["side"]; dx: number; dy: number }[]> = {
-  R:  [{ side: "left", dx: -PIN_OUT, dy: 0 }, { side: "right", dx: PIN_OUT, dy: 0 }],
-  C:  [{ side: "left", dx: -PIN_OUT, dy: 0 }, { side: "right", dx: PIN_OUT, dy: 0 }],
-  L:  [{ side: "left", dx: -PIN_OUT, dy: 0 }, { side: "right", dx: PIN_OUT, dy: 0 }],
-  D:  [{ side: "left", dx: -PIN_OUT, dy: 0 }, { side: "right", dx: PIN_OUT, dy: 0 }],
-  Q:  [
-    { side: "left", dx: -PIN_OUT, dy: 0 },
-    { side: "top", dx: 0, dy: -PIN_OUT_V },
-    { side: "bottom", dx: 0, dy: PIN_OUT_V },
-  ],
-  M:  [
-    { side: "left", dx: -PIN_OUT, dy: 0 },
-    { side: "top", dx: 0, dy: -PIN_OUT_V },
-    { side: "bottom", dx: 0, dy: PIN_OUT_V },
-  ],
+  // Passives — 2 horizontal pins
+  R:   [{ side: "left", dx: -PIN_OUT, dy: 0 }, { side: "right", dx: PIN_OUT, dy: 0 }],
+  C:   [{ side: "left", dx: -PIN_OUT, dy: 0 }, { side: "right", dx: PIN_OUT, dy: 0 }],
+  L:   [{ side: "left", dx: -PIN_OUT, dy: 0 }, { side: "right", dx: PIN_OUT, dy: 0 }],
+  D:   [{ side: "left", dx: -PIN_OUT, dy: 0 }, { side: "right", dx: PIN_OUT, dy: 0 }],
+  // 3-terminal semiconductors — Gate/Base left, Drain/Collector top, Source/Emitter bottom
+  Q:   [{ side: "left", dx: -PIN_OUT, dy: 0 }, { side: "top", dx: 0, dy: -PIN_OUT_V }, { side: "bottom", dx: 0, dy: PIN_OUT_V }],
+  M:   [{ side: "left", dx: -PIN_OUT, dy: 0 }, { side: "top", dx: 0, dy: -PIN_OUT_V }, { side: "bottom", dx: 0, dy: PIN_OUT_V }],
+  J:   [{ side: "left", dx: -PIN_OUT, dy: 0 }, { side: "top", dx: 0, dy: -PIN_OUT_V }, { side: "bottom", dx: 0, dy: PIN_OUT_V }],
+  SCR: [{ side: "left", dx: -PIN_OUT, dy: 0 }, { side: "top", dx: 0, dy: -PIN_OUT_V }, { side: "bottom", dx: 0, dy: PIN_OUT_V }],
+  TRI: [{ side: "left", dx: -PIN_OUT, dy: 0 }, { side: "top", dx: 0, dy: -PIN_OUT_V }, { side: "bottom", dx: 0, dy: PIN_OUT_V }],
+  // Schematic helpers
   GND: [{ side: "top", dx: 0, dy: -PIN_OUT_V }],
   "V+": [{ side: "bottom", dx: 0, dy: PIN_OUT_V }],
-  J:  [
+  JP:  [
     { side: "left", dx: -PIN_OUT, dy: 0 },
     { side: "right", dx: PIN_OUT, dy: 0 },
     { side: "top", dx: 0, dy: -PIN_OUT_V },
@@ -88,13 +97,16 @@ const PIN_LAYOUTS: Record<string, { side: Pin["side"]; dx: number; dy: number }[
 };
 
 const PIN_LABELS: Record<string, Record<string, string>> = {
-  R: { left: "1", right: "2" },
-  C: { left: "+", right: "−" },
-  L: { left: "1", right: "2" },
-  D: { left: "A", right: "K" },
-  Q: { left: "B", top: "C", bottom: "E" },
-  M: { left: "G", top: "D", bottom: "S" },
-  GND: {}, "V+": {}, J: {},
+  R:   { left: "1",  right: "2"   },
+  C:   { left: "+",  right: "−"   },
+  L:   { left: "1",  right: "2"   },
+  D:   { left: "A",  right: "K"   },
+  Q:   { left: "B",  top: "C",  bottom: "E"   },
+  M:   { left: "G",  top: "D",  bottom: "S"   },
+  J:   { left: "G",  top: "D",  bottom: "S"   },
+  SCR: { left: "G",  top: "A",  bottom: "K"   },
+  TRI: { left: "G",  top: "MT1", bottom: "MT2" },
+  GND: {}, "V+": {}, JP: {},
 };
 
 const getPinLabel = (t: string, s: string) => PIN_LABELS[t]?.[s] || "";
@@ -186,7 +198,10 @@ function ComponentSymbolImpl({ type, color }: { type: string; color: string }) {
     case "M": return <svg width={size} height={size} viewBox="0 0 24 24" fill="none"><line x1="2" y1="12" x2="7" y2="12" stroke={strokeColor} strokeWidth="1.8" /><line x1="7" y1="5" x2="7" y2="19" stroke={strokeColor} strokeWidth="2" /><line x1="10" y1="5" x2="10" y2="9" stroke={strokeColor} strokeWidth="1.8" /><line x1="10" y1="11" x2="10" y2="13" stroke={strokeColor} strokeWidth="1.8" /><line x1="10" y1="15" x2="10" y2="19" stroke={strokeColor} strokeWidth="1.8" /><line x1="10" y1="7" x2="20" y2="7" stroke={strokeColor} strokeWidth="1.5" /><line x1="10" y1="17" x2="20" y2="17" stroke={strokeColor} strokeWidth="1.5" /><line x1="10" y1="12" x2="20" y2="12" stroke={strokeColor} strokeWidth="1.5" /><line x1="20" y1="7" x2="20" y2="12" stroke={strokeColor} strokeWidth="1.5" /></svg>;
     case "GND": return <svg width={size} height={size} viewBox="0 0 24 24" fill="none"><line x1="12" y1="2" x2="12" y2="10" stroke={strokeColor} strokeWidth="1.8" /><line x1="4" y1="10" x2="20" y2="10" stroke={strokeColor} strokeWidth="2" /><line x1="7" y1="14" x2="17" y2="14" stroke={strokeColor} strokeWidth="1.8" /><line x1="10" y1="18" x2="14" y2="18" stroke={strokeColor} strokeWidth="1.5" /></svg>;
     case "V+": return <svg width={size} height={size} viewBox="0 0 24 24" fill="none"><line x1="12" y1="22" x2="12" y2="10" stroke={strokeColor} strokeWidth="1.8" /><polygon points="12,4 8,10 16,10" fill={strokeColor} opacity="0.4" stroke={strokeColor} strokeWidth="1.5" /></svg>;
-    case "J": return <svg width={size} height={size} viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="5" fill={strokeColor} opacity="0.6" stroke={strokeColor} strokeWidth="1.5" /></svg>;
+    case "J":   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none"><line x1="2" y1="12" x2="9" y2="12" stroke={strokeColor} strokeWidth="1.8"/><line x1="11" y1="4" x2="11" y2="20" stroke={strokeColor} strokeWidth="2.2"/><line x1="11" y1="8" x2="17" y2="6" stroke={strokeColor} strokeWidth="1.6" strokeLinecap="round"/><line x1="11" y1="16" x2="17" y2="18" stroke={strokeColor} strokeWidth="1.6" strokeLinecap="round"/></svg>;
+    case "SCR": return <svg width={size} height={size} viewBox="0 0 24 24" fill="none"><line x1="2" y1="12" x2="8" y2="12" stroke={strokeColor} strokeWidth="1.8"/><line x1="12" y1="2" x2="12" y2="8" stroke={strokeColor} strokeWidth="1.8"/><line x1="12" y1="16" x2="12" y2="22" stroke={strokeColor} strokeWidth="1.8"/><polygon points="8,6 16,12 8,18" fill={strokeColor} opacity="0.3" stroke={strokeColor} strokeWidth="1.4"/><line x1="8" y1="18" x2="16" y2="18" stroke={strokeColor} strokeWidth="2"/><line x1="8" y1="18" x2="10" y2="12" stroke={strokeColor} strokeWidth="1.4"/></svg>;
+    case "TRI": return <svg width={size} height={size} viewBox="0 0 24 24" fill="none"><line x1="2" y1="12" x2="7" y2="12" stroke={strokeColor} strokeWidth="1.8"/><line x1="12" y1="2" x2="12" y2="8" stroke={strokeColor} strokeWidth="1.8"/><line x1="12" y1="16" x2="12" y2="22" stroke={strokeColor} strokeWidth="1.8"/><polygon points="7,6 17,6 12,12" fill={strokeColor} opacity="0.25" stroke={strokeColor} strokeWidth="1.4"/><polygon points="7,18 17,18 12,12" fill={strokeColor} opacity="0.25" stroke={strokeColor} strokeWidth="1.4"/></svg>;
+    case "JP":  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="5" fill={strokeColor} opacity="0.6" stroke={strokeColor} strokeWidth="1.5"/></svg>;
     default: return <span className={`font-mono text-sm font-bold ${color}`}>{type}</span>;
   }
 }
@@ -329,8 +344,56 @@ function SchematicBody({ type, color, accent }: { type: string; color: string; a
       );
     }
     case "J": {
-      // Junction: small filled dot at the center; four small stubs out to each
-      // pin so it visually anchors to whatever wire(s) latch onto it.
+      // JFET: gate on left, drain top, source bottom. Similar to MOSFET but continuous channel.
+      return (
+        <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="overflow-visible">
+          <Lead x1={0} y1={cy} x2={30} y2={cy} />
+          <Lead x1={cx} y1={0} x2={cx} y2={8} />
+          <Lead x1={cx} y1={32} x2={cx} y2={h} />
+          {/* channel: solid bar */}
+          <line x1={34} y1={10} x2={34} y2={30} stroke={accent} strokeWidth={2.4} strokeLinecap="round" />
+          {/* gate horizontal + arrow */}
+          <line x1={30} y1={cy} x2={34} y2={cy} stroke={accent} strokeWidth={sw} strokeLinecap="round" />
+          {/* drain / source connections */}
+          <line x1={34} y1={14} x2={cx} y2={14} stroke={accent} strokeWidth={sw} strokeLinecap="round" />
+          <line x1={cx} y1={14} x2={cx} y2={8}  stroke={accent} strokeWidth={sw} strokeLinecap="round" />
+          <line x1={34} y1={26} x2={cx} y2={26} stroke={accent} strokeWidth={sw} strokeLinecap="round" />
+          <line x1={cx} y1={26} x2={cx} y2={32} stroke={accent} strokeWidth={sw} strokeLinecap="round" />
+          <polygon points={`${cx - 3},23 ${cx + 1},26 ${cx - 3},29`} fill={accent} />
+        </svg>
+      );
+    }
+    case "SCR": {
+      // Thyristor (SCR): diode body + gate on left, anode top, cathode bottom.
+      return (
+        <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="overflow-visible">
+          <Lead x1={0} y1={cy} x2={28} y2={cy} />  {/* gate */}
+          <Lead x1={cx} y1={0} x2={cx} y2={8} />   {/* anode */}
+          <Lead x1={cx} y1={32} x2={cx} y2={h} />  {/* cathode */}
+          <polygon points={`${cx - 8},10 ${cx + 8},10 ${cx},26`} fill={accent} fillOpacity={0.25} stroke={accent} strokeWidth={sw} strokeLinejoin="round" />
+          <line x1={cx - 8} y1={26} x2={cx + 8} y2={26} stroke={accent} strokeWidth={2.4} strokeLinecap="round" />
+          {/* gate stub */}
+          <line x1={28} y1={cy} x2={cx - 8} y2={26} stroke={accent} strokeWidth={sw} strokeLinecap="round" />
+        </svg>
+      );
+    }
+    case "TRI": {
+      // Triac: two back-to-back thyristors, gate on left.
+      return (
+        <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="overflow-visible">
+          <Lead x1={0} y1={cy} x2={28} y2={cy} />
+          <Lead x1={cx} y1={0} x2={cx} y2={8} />
+          <Lead x1={cx} y1={32} x2={cx} y2={h} />
+          <polygon points={`${cx - 8},10 ${cx + 8},10 ${cx},20`} fill={accent} fillOpacity={0.2} stroke={accent} strokeWidth={sw} strokeLinejoin="round" />
+          <polygon points={`${cx - 8},30 ${cx + 8},30 ${cx},20`} fill={accent} fillOpacity={0.2} stroke={accent} strokeWidth={sw} strokeLinejoin="round" />
+          <line x1={cx - 8} y1={10} x2={cx + 8} y2={10} stroke={accent} strokeWidth={2.2} strokeLinecap="round" />
+          <line x1={cx - 8} y1={30} x2={cx + 8} y2={30} stroke={accent} strokeWidth={2.2} strokeLinecap="round" />
+          <line x1={28} y1={cy} x2={cx - 8} y2={cy} stroke={accent} strokeWidth={sw} strokeLinecap="round" />
+        </svg>
+      );
+    }
+    case "JP": {
+      // Junction point: small filled dot with stubs to all 4 pins.
       return (
         <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="overflow-visible">
           <Lead x1={0} y1={cy} x2={w} y2={cy} />
@@ -390,11 +453,73 @@ const CircuitBuilder = () => {
   const [history, setHistory] = useState<{ comps: PlacedComponent[]; wires: Wire[]; junctions: { x: number; y: number }[] }[]>([]);
   const [showStats, setShowStats] = useState(true);
   const [assistOpen, setAssistOpen] = useState(false);
-  // BLE feed lives here (not inside BuildAssistPanel) so ble.connect() can be
-  // called directly from the Search button's onClick — Web Bluetooth requires
-  // the call to originate from a user gesture (click event), and effects / child
-  // lifecycle hooks do NOT satisfy that requirement.
-  const ble = useBleFeed({ paused: !assistOpen });
+  // BLE feed — shared context so connection survives page navigation.
+  // We pause it when build-assist is closed (same behaviour as before).
+  const ble = useBle();
+  useEffect(() => { ble.setPaused(!assistOpen); }, [assistOpen]);
+
+  // ── Save / Load ────────────────────────────────────────────────────────────
+  const [currentCircuitId, setCurrentCircuitId]     = useState<string | null>(null);
+  const [currentCircuitName, setCurrentCircuitName] = useState("Untitled circuit");
+  const [saving, setSaving]                         = useState(false);
+  const [savedCircuits, setSavedCircuits]           = useState<Circuit[]>([]);
+  const [showLoadPanel, setShowLoadPanel]           = useState(false);
+  const [loadingList, setLoadingList]               = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const snap = circuitStore.get();
+      const payload = {
+        components: snap.components,
+        wires:      snap.wires,
+        junctions:  snap.junctions,
+        name:       currentCircuitName,
+      };
+      if (currentCircuitId) {
+        await circuitsApi.update(currentCircuitId, payload);
+      } else {
+        const name = window.prompt("Name this circuit:", "Untitled circuit");
+        if (!name) return;
+        const saved = await circuitsApi.create({ ...payload, name });
+        setCurrentCircuitId(saved.id);
+        setCurrentCircuitName(saved.name);
+      }
+    } catch (err) {
+      console.error("Save failed:", err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openLoadPanel = async () => {
+    setShowLoadPanel(true);
+    setLoadingList(true);
+    try {
+      setSavedCircuits(await circuitsApi.list());
+    } catch (err) {
+      console.error("Load list failed:", err);
+    } finally {
+      setLoadingList(false);
+    }
+  };
+
+  const loadCircuit = async (id: string) => {
+    try {
+      const c = await circuitsApi.get(id);
+      circuitStore.set({
+        components: c.components as PlacedComponent[],
+        wires:      c.wires      as Wire[],
+        junctions:  c.junctions  as { x: number; y: number }[],
+      });
+      setCurrentCircuitId(c.id);
+      setCurrentCircuitName(c.name);
+      setShowLoadPanel(false);
+    } catch (err) {
+      console.error("Load failed:", err);
+    }
+  };
+
   // True while a freshly-added component is "ghost-following" the cursor
   // until the user clicks once to drop it.
   const [placingId, setPlacingId] = useState<string | null>(null);
@@ -442,18 +567,31 @@ const CircuitBuilder = () => {
     return best;
   }, [allPins]);
 
+  // ── Undo / History ─────────────────────────────────────────────────────────
+  // Always read from circuitStore.get() — never from the React state variables
+  // (components / wires / junctions). Those values can be one render behind
+  // when pushHistory is called right after a circuitStore.set(). Reading the
+  // store directly guarantees we snapshot the state that was JUST written.
   const pushHistory = useCallback(() => {
-    setHistory(prev => [...prev.slice(-40), { comps: components, wires, junctions }]);
-  }, [components, wires, junctions]);
+    const s = circuitStore.get();
+    setHistory(prev => [
+      ...prev.slice(-40),
+      { comps: s.components, wires: s.wires, junctions: s.junctions },
+    ]);
+  }, []); // no deps — always reads fresh from store
 
   const undo = useCallback(() => {
-    if (history.length === 0) return;
-    const prev = history[history.length - 1];
-    setComponents(prev.comps);
-    setWires(prev.wires);
-    setJunctions(prev.junctions);
-    setHistory(h => h.slice(0, -1));
-  }, [history]);
+    setHistory(prev => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+      circuitStore.set({
+        components: last.comps,
+        wires:      last.wires,
+        junctions:  last.junctions,
+      });
+      return prev.slice(0, -1);
+    });
+  }, []);
 
   // ─── Keyboard shortcuts ─────────────────────────────────
   useEffect(() => {
@@ -958,9 +1096,11 @@ const CircuitBuilder = () => {
             <ArrowLeft className="h-5 w-5" />
           </button>
           <div>
-            <h1 className="text-base font-bold leading-tight">Circuit Builder</h1>
+            <h1 className="text-base font-bold leading-tight">
+              {currentCircuitId ? currentCircuitName : "Circuit Builder"}
+            </h1>
             {showStats && (
-              <p className="text-[10px] text-muted-foreground">{stats.total} parts · {stats.wires} wires</p>
+              <p className="text-[10px] text-muted-foreground">{stats.total} parts · {stats.wires} wires{currentCircuitId ? " · saved" : " · unsaved"}</p>
             )}
           </div>
         </div>
@@ -979,18 +1119,22 @@ const CircuitBuilder = () => {
           </button>
           <button
             onClick={() => {
-              setAssistOpen(true);
-              // connect() MUST be called here, inside the onClick handler, to
-              // satisfy the Web Bluetooth user-gesture requirement. Calling it
-              // later from an effect or child component will be silently blocked.
-              if (!ble.connected) void ble.connect();
+              if (ble.connected) {
+                // Already connected — open the build-assist panel directly
+                setAssistOpen(true);
+              } else {
+                // Not connected — go to the connection page.
+                // Web Bluetooth connect() must be called from a user gesture
+                // on the connection page itself, not here.
+                navigate("/connect");
+              }
             }}
             className={`rounded-lg border p-2 transition-colors ${
               ble.connected
                 ? "border-inductor/60 bg-inductor/20 text-inductor"
-                : "border-inductor/40 bg-inductor/10 text-inductor hover:brightness-110"
+                : "border-border bg-card text-muted-foreground hover:text-foreground"
             }`}
-            title={ble.connected ? "Build-Assist (connected)" : "Build-Assist (measure & match)"}
+            title={ble.connected ? "Build-Assist (connected)" : "Connect device to use Build-Assist"}
           >
             {ble.connected
               ? <Bluetooth className="h-3.5 w-3.5" />
@@ -1003,8 +1147,11 @@ const CircuitBuilder = () => {
           <button onClick={() => navigate("/validation")} className="rounded-lg border border-primary/30 bg-primary/10 p-2 text-primary" title="Validate Circuit">
             <Play className="h-3.5 w-3.5" />
           </button>
-          <button className="rounded-lg border border-primary/30 bg-primary/10 p-2 text-primary" title="Save">
-            <Save className="h-3.5 w-3.5" />
+          <button onClick={openLoadPanel} className="rounded-lg border border-border bg-card p-2 text-muted-foreground hover:text-foreground" title="Load circuit">
+            <FolderOpen className="h-3.5 w-3.5" />
+          </button>
+          <button onClick={handleSave} disabled={saving} className="rounded-lg border border-primary/30 bg-primary/10 p-2 text-primary disabled:opacity-50" title="Save circuit">
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
           </button>
         </div>
       </div>
@@ -1332,6 +1479,7 @@ const CircuitBuilder = () => {
         open={assistOpen}
         ble={ble}
         onClose={() => setAssistOpen(false)}
+        navigate={navigate}
         onAccept={(id) => {
           setComponents(prev => prev.map(c => c.id === id ? { ...c, found: true } : c));
         }}
@@ -1354,6 +1502,86 @@ const CircuitBuilder = () => {
           ))}
         </div>
       </div>
+
+      {/* ── Load circuit panel ── */}
+      <AnimatePresence>
+        {showLoadPanel && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-40 z-50 flex items-end justify-center"
+            onClick={(e) => { if (e.target === e.currentTarget) setShowLoadPanel(false); }}
+          >
+            <motion.div
+              initial={{ y: 80, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 80, opacity: 0 }}
+              className="w-full max-w-lg rounded-t-2xl border border-border bg-card p-4 pb-8"
+            >
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-base font-bold">Load circuit</h2>
+                <button onClick={() => setShowLoadPanel(false)} className="rounded-lg p-1.5 hover:bg-secondary">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {loadingList && (
+                <div className="flex items-center justify-center py-10 text-muted-foreground gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span className="text-sm">Loading…</span>
+                </div>
+              )}
+
+              {!loadingList && savedCircuits.length === 0 && (
+                <p className="py-10 text-center text-sm text-muted-foreground">No saved circuits yet</p>
+              )}
+
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                {savedCircuits.map((c) => (
+                  <div
+                    key={c.id}
+                    className={`flex w-full items-center justify-between rounded-xl border p-3 transition-all ${
+                      c.id === currentCircuitId ? "border-primary/50 bg-primary/5" : "border-border bg-card"
+                    }`}
+                  >
+                    <button
+                      onClick={() => loadCircuit(c.id)}
+                      className="flex-1 text-left active:scale-[0.98]"
+                    >
+                      <p className="text-sm font-medium">{c.name}</p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        {new Date(c.updatedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                        {c.id === currentCircuitId && <span className="ml-2 text-primary font-semibold">· current</span>}
+                      </p>
+                    </button>
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        if (!window.confirm(`Delete "${c.name}"? This cannot be undone.`)) return;
+                        try {
+                          await circuitsApi.remove(c.id);
+                          setSavedCircuits(prev => prev.filter(x => x.id !== c.id));
+                          if (c.id === currentCircuitId) {
+                            setCurrentCircuitId(null);
+                            setCurrentCircuitName("Untitled circuit");
+                          }
+                        } catch (err) {
+                          console.error("Delete failed:", err);
+                        }
+                      }}
+                      className="ml-2 shrink-0 rounded-lg p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                      title="Delete circuit"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -1434,13 +1662,13 @@ const BuildAssistPanel = ({
   ble,
   onClose,
   onAccept,
+  navigate,
 }: {
   open: boolean;
-  /** Lifted from CircuitBuilder so connect() was already called from an onClick
-   *  (user-gesture) context before the panel mounts. */
   ble: BleFeed;
   onClose: () => void;
   onAccept: (id: string) => void;
+  navigate: ReturnType<typeof useNavigate>;
 }) => {
   const stored = useCircuitStore();
   const [snapshot, setSnapshot] = useState<MatchResult | null>(null);
@@ -1490,7 +1718,7 @@ const BuildAssistPanel = ({
     );
   }
 
-  // ── Disconnected — waiting for user to pick a device (or re-connect) ─────
+  // ── Disconnected — navigate to connection page ───────────────────────────
   if (!ble.connected) {
     return (
       <motion.div
@@ -1509,21 +1737,16 @@ const BuildAssistPanel = ({
           <Bluetooth className="h-7 w-7 text-inductor mx-auto mb-2 opacity-60" />
           <p className="text-xs font-semibold mb-1">Not connected to tester</p>
           <p className="text-[10px] text-muted-foreground mb-4">
-            Make sure the HM-10 module is powered on, then tap Connect.
+            Go to the connection page and pair your Smart LCR Meter.
           </p>
-          {/* connect() here IS inside an onClick — satisfies Web Bluetooth gesture requirement */}
           <button
-            onClick={() => void ble.connect()}
+            onClick={() => { onClose(); navigate("/connect"); }}
             className="w-full rounded-lg bg-inductor py-2.5 text-xs font-bold text-background"
           >
             <Bluetooth className="inline h-3.5 w-3.5 mr-1.5" />
-            Connect to Tester
+            Connect device
           </button>
         </div>
-
-        <p className="text-center text-[9px] text-muted-foreground/60">
-          A browser device-picker will appear. Select your HM-10 module.
-        </p>
       </motion.div>
     );
   }

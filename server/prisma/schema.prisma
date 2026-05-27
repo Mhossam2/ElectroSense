@@ -1,0 +1,64 @@
+// ============================================================================
+// Prisma schema — SQLite for development, swap datasource for PostgreSQL in prod
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ── Models ────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  passwordHash String
+  createdAt    DateTime      @default(now())
+
+  circuits     Circuit[]
+  measurements Measurement[]
+}
+
+model Circuit {
+  id         String   @id @default(cuid())
+  userId     String
+  name       String   @default("Untitled circuit")
+
+  // Serialised JSON blobs — stored as String in SQLite
+  components String   @default("[]")
+  wires      String   @default("[]")
+  junctions  String   @default("[]")
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  measurements Measurement[]
+}
+
+model Measurement {
+  id              String   @id @default(cuid())
+  userId          String
+  circuitId       String?
+
+  // Component type detected by the firmware (e.g. "resistor", "capacitor")
+  type            String?
+
+  // Raw values from firmware as JSON string, e.g. '{"r":"10.0k"}'
+  values          String?
+
+  // Pin-order string from firmware, e.g. "123=BCE"
+  pinOrder        String?
+
+  signalFrequency Float?
+  externalVoltage Float?
+
+  timestamp       DateTime @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  circuit Circuit? @relation(fields: [circuitId], references: [id], onDelete: SetNull)
+}

@@ -2,7 +2,7 @@
 // DASHBOARD — Smart LCR Lab
 // ============================================================================
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Activity, Save, BookOpen, Zap, ArrowLeftRight, Cpu, Info, History,
@@ -19,8 +19,9 @@ import {
   type Parameter,
 } from "@/data/components";
 import { GENERATORS, GENERATOR_ORDER, type GeneratorKey } from "@/data/generators";
-import { useBleFeed } from "@/hooks/use-ble-feed";
+import { useBle } from "@/contexts/BleContext";
 import type { ParsedPinOrder } from "@/hooks/use-ble-feed";
+import { measurementsApi } from "@/lib/api";
 
 type TopMode = "read" | "generate";
 type ReadSub = "component" | "frequency" | "voltage";
@@ -105,7 +106,29 @@ const Dashboard = () => {
   const [genKey, setGenKey]       = useState<GeneratorKey>("psu");
   const [measuring, setMeasuring] = useState(true);
 
-  const ble = useBleFeed({ paused: topMode === "generate" || !measuring });
+  const ble = useBle();
+
+  useEffect(() => {
+    ble.setPaused(topMode === "generate" || !measuring);
+  }, [topMode, measuring]);
+
+  const lastSavedTimestamp = useRef<number>(0);
+  useEffect(() => {
+    if (!ble.connected || !ble.detected || !ble.values) return;
+    if (ble.timestamp === lastSavedTimestamp.current) return;
+    const t = setTimeout(() => {
+      lastSavedTimestamp.current = ble.timestamp;
+      measurementsApi.create({
+        type: ble.detected,
+        values: ble.values ?? undefined,
+        pinOrder: ble.pinOrderRaw ?? undefined,
+        signalFrequency: ble.signalFrequency ?? undefined,
+        externalVoltage: ble.externalVoltage ?? undefined,
+        circuitId: null,
+      }).catch(console.error);
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [ble.detected, ble.timestamp]);
 
   return (
     <div className="px-4 pt-6 pb-6 max-w-screen-md mx-auto">
@@ -128,13 +151,17 @@ const Dashboard = () => {
 
         {ble.bleSupported ? (
           ble.connected ? (
-            <div className="flex items-center gap-1.5 text-xs text-inductor font-medium">
+            <button
+              onClick={() => ble.disconnect()}
+              className="flex items-center gap-1.5 text-xs text-inductor font-medium hover:text-destructive transition-colors"
+              title="Tap to disconnect"
+            >
               <Bluetooth className="h-3 w-3" />
-              <span>BLE</span>
-            </div>
+              <span>Connected</span>
+            </button>
           ) : (
             <button
-              onClick={ble.connect}
+              onClick={() => navigate("/connect")}
               className="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10
                          px-2.5 py-1 text-[11px] font-semibold text-primary hover:bg-primary/20
                          active:scale-95 transition-all"
@@ -325,7 +352,7 @@ const Dashboard = () => {
 // ============================================================================
 const ReadComponentView = ({
   ble, navigate,
-}: { ble: ReturnType<typeof useBleFeed>; navigate: ReturnType<typeof useNavigate> }) => {
+}: { ble: ReturnType<typeof useBle>; navigate: ReturnType<typeof useNavigate> }) => {
 
   const comp = ble.detected ? COMPONENTS[ble.detected] : null;
 
@@ -355,10 +382,17 @@ const ReadComponentView = ({
     return (
       <div className="rounded-2xl border border-border bg-card p-10 text-center">
         <Bluetooth className="h-10 w-10 text-muted-foreground/20 mx-auto mb-3" />
-        <p className="text-sm font-semibold text-muted-foreground">Not connected</p>
-        <p className="text-xs text-muted-foreground/50 mt-1">
-          Tap <span className="font-semibold text-primary">Connect</span> at the top to pair your Smart LCR Meter
+        <p className="text-sm font-semibold text-muted-foreground mb-1">Not connected</p>
+        <p className="text-xs text-muted-foreground/50 mb-4">
+          Pair your Smart LCR Meter to start measuring
         </p>
+        <button
+          onClick={() => navigate("/connect")}
+          className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 active:scale-95 transition-all"
+        >
+          <Bluetooth className="h-4 w-4" />
+          Connect device
+        </button>
       </div>
     );
   }

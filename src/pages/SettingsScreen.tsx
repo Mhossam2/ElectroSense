@@ -4,9 +4,19 @@ import {
   ChevronRight, Sun, Moon, Monitor
 } from "lucide-react";
 import { useTheme } from "@/hooks/use-theme";
+import { useAuth } from "@/contexts/AuthContext";
+import { useNavigate } from "react-router-dom";
+import { LogOut } from "lucide-react";
 
 const SettingsScreen = () => {
   const { theme, setTheme } = useTheme();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    navigate("/login", { replace: true });
+  };
 
   const themeLabel = theme === "dark" ? "Dark" : theme === "light" ? "Light" : "System";
 
@@ -69,6 +79,19 @@ const SettingsScreen = () => {
           <p className="text-[10px] text-muted-foreground/60 mt-1">© 2026 Smart LCR Lab</p>
         </div>
       </div>
+      <div className="mt-4">
+  <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground pb-1">Account</p>
+  <div className="rounded-xl border border-border bg-card p-4">
+    <p className="text-sm text-muted-foreground mb-3">Signed in as <span className="text-foreground font-medium">{user?.email}</span></p>
+    <button
+      onClick={handleLogout}
+      className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive"
+    >
+      <LogOut className="h-4 w-4" />
+      Sign out
+    </button>
+  </div>
+</div>
     </div>
   );
 };
@@ -89,6 +112,7 @@ const SettingCard = ({ icon: Icon, label, value, hasChevron, accent }: {
       <p className="text-xs text-muted-foreground">{value}</p>
     </div>
     {hasChevron && <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+    
   </button>
 );
 

@@ -1,154 +1,174 @@
-import { useState } from "react";
-import { motion } from "framer-motion";
-import { Bluetooth, BluetoothSearching, Wifi, Battery, ChevronRight, RefreshCw } from "lucide-react";
+// ============================================================================
+// DeviceConnection — real BLE connection page
+//
+// Web Bluetooth works by showing the browser's native device-picker when the
+// user clicks a button. There is no way to scan and list devices yourself —
+// the picker IS the scan UI. So this page:
+//
+//   1. Shows clear instructions and a prominent "Connect" button
+//   2. On click, calls ble.connect() which triggers the browser picker
+//   3. While connecting, shows a spinner
+//   4. On success, shows a "Connected" confirmation and navigates home
+//   5. If already connected, shows the current status with a disconnect option
+// ============================================================================
+
+import { useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  Bluetooth, BluetoothOff, BluetoothSearching,
+  CheckCircle2, Loader2, ArrowLeft, Zap, AlertCircle,
+} from "lucide-react";
 import { useNavigate } from "react-router-dom";
-
-interface Device {
-  id: string;
-  name: string;
-  rssi: number;
-  connected: boolean;
-}
-
-const mockDevices: Device[] = [
-  { id: "1", name: "Smart LCR Meter v2.1", rssi: -42, connected: false },
-  { id: "2", name: "LCR-ESP32-0A3F", rssi: -67, connected: false },
-  { id: "3", name: "Lab Meter Pro", rssi: -81, connected: false },
-];
-
-const getRssiLabel = (rssi: number) => {
-  if (rssi > -50) return { label: "Excellent", bars: 4 };
-  if (rssi > -65) return { label: "Good", bars: 3 };
-  if (rssi > -75) return { label: "Fair", bars: 2 };
-  return { label: "Weak", bars: 1 };
-};
-
-const SignalBars = ({ bars }: { bars: number }) => (
-  <div className="flex items-end gap-0.5">
-    {[1, 2, 3, 4].map((i) => (
-      <div
-        key={i}
-        className={`w-1 rounded-full transition-colors ${
-          i <= bars ? "bg-primary" : "bg-border"
-        }`}
-        style={{ height: `${6 + i * 3}px` }}
-      />
-    ))}
-  </div>
-);
+import { useBle } from "@/contexts/BleContext";
 
 const DeviceConnection = () => {
-  const [scanning, setScanning] = useState(false);
-  const [connectedId, setConnectedId] = useState<string | null>(null);
-  const [connecting, setConnecting] = useState<string | null>(null);
+  const ble      = useBle();
   const navigate = useNavigate();
 
-  const handleScan = () => {
-    setScanning(true);
-    setTimeout(() => setScanning(false), 2000);
-  };
-
-  const handleConnect = (id: string) => {
-    setConnecting(id);
-    setTimeout(() => {
-      setConnecting(null);
-      setConnectedId(id);
-      setTimeout(() => navigate("/"), 800);
-    }, 1500);
-  };
+  // Auto-navigate home once connected
+  useEffect(() => {
+    if (ble.connected) {
+      const t = setTimeout(() => navigate("/"), 1200);
+      return () => clearTimeout(t);
+    }
+  }, [ble.connected, navigate]);
 
   return (
-    <div className="px-4 pt-12 pb-4">
-      {/* Header */}
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
-        <div className="flex items-center gap-3 mb-1">
-          <BluetoothSearching className="h-6 w-6 text-primary" />
-          <h1 className="text-2xl font-bold">Device Connection</h1>
+    <div className="flex min-h-[calc(100vh-80px)] flex-col px-4 pt-10 pb-6">
+
+      {/* Back button */}
+      <button
+        onClick={() => navigate(-1)}
+        className="mb-6 flex items-center gap-1.5 self-start rounded-lg p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        <span className="text-sm">Back</span>
+      </button>
+
+      {/* Title */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="mb-10 text-center"
+      >
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10">
+          <BluetoothSearching className="h-8 w-8 text-primary" />
         </div>
-        <p className="text-sm text-muted-foreground">Find and connect to your Smart LCR Meter</p>
+        <h1 className="text-2xl font-bold mb-1">Connect Device</h1>
+        <p className="text-sm text-muted-foreground">
+          Pair your Smart LCR Meter over Bluetooth
+        </p>
       </motion.div>
 
-      {/* Scan button */}
-      <motion.button
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.1 }}
-        onClick={handleScan}
-        className="mb-6 flex w-full items-center justify-center gap-2 rounded-xl border border-primary/30 bg-primary/10 px-4 py-3 text-sm font-medium text-primary transition-all hover:bg-primary/20 active:scale-[0.98]"
-      >
-        <RefreshCw className={`h-4 w-4 ${scanning ? "animate-spin" : ""}`} />
-        {scanning ? "Scanning..." : "Scan for Devices"}
-      </motion.button>
+      {/* ── Not supported ── */}
+      {!ble.bleSupported && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="rounded-2xl border border-destructive/30 bg-destructive/5 p-6 text-center"
+        >
+          <BluetoothOff className="h-8 w-8 text-destructive mx-auto mb-3 opacity-70" />
+          <p className="text-sm font-semibold text-destructive mb-2">
+            Web Bluetooth not supported
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Use <strong>Chrome</strong> or <strong>Edge</strong> on desktop or Android.
+            Safari and Firefox do not support Web Bluetooth.
+          </p>
+        </motion.div>
+      )}
 
-      {/* Devices list */}
-      <div className="space-y-3">
-        {mockDevices.map((device, i) => {
-          const signal = getRssiLabel(device.rssi);
-          const isConnected = connectedId === device.id;
-          const isConnecting = connecting === device.id;
-          return (
+      {/* ── Already connected ── */}
+      <AnimatePresence>
+        {ble.bleSupported && ble.connected && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="rounded-2xl border border-inductor/40 bg-inductor/5 p-6 text-center"
+          >
             <motion.div
-              key={device.id}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.15 + i * 0.08 }}
-              className={`rounded-xl border p-4 transition-all card-glow ${
-                isConnected
-                  ? "border-primary/50 bg-primary/5"
-                  : "border-border bg-card"
-              }`}
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ type: "spring", stiffness: 300, damping: 20 }}
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${
-                    isConnected ? "bg-primary/20" : "bg-secondary"
-                  }`}>
-                    <Bluetooth className={`h-5 w-5 ${isConnected ? "text-primary" : "text-muted-foreground"}`} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold">{device.name}</p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <SignalBars bars={signal.bars} />
-                      <span className="text-xs text-muted-foreground">{signal.label} ({device.rssi} dBm)</span>
-                    </div>
-                  </div>
-                </div>
-                <button
-                  onClick={() => handleConnect(device.id)}
-                  disabled={isConnecting || isConnected}
-                  className={`rounded-lg px-4 py-2 text-xs font-semibold transition-all ${
-                    isConnected
-                      ? "bg-primary/20 text-primary"
-                      : isConnecting
-                      ? "bg-secondary text-muted-foreground"
-                      : "bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95"
-                  }`}
-                >
-                  {isConnected ? "Connected" : isConnecting ? "Connecting..." : "Connect"}
-                </button>
-              </div>
-
-              {isConnected && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: "auto", opacity: 1 }}
-                  className="mt-3 flex items-center gap-4 border-t border-border pt-3"
-                >
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <Battery className="h-3.5 w-3.5 text-inductor" />
-                    <span>87%</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <Wifi className="h-3.5 w-3.5 text-primary" />
-                    <span>BLE 5.0</span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">FW v2.1.3</span>
-                </motion.div>
-              )}
+              <CheckCircle2 className="h-10 w-10 text-inductor mx-auto mb-3" />
             </motion.div>
-          );
-        })}
-      </div>
+            <p className="text-sm font-semibold text-inductor mb-1">Connected!</p>
+            <p className="text-xs text-muted-foreground mb-5">
+              Your Smart LCR Meter is ready. Taking you to the dashboard…
+            </p>
+
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => navigate("/")}
+                className="w-full rounded-xl bg-primary py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all"
+              >
+                Go to Dashboard
+              </button>
+              <button
+                onClick={() => ble.disconnect()}
+                className="w-full rounded-xl border border-destructive/30 bg-destructive/5 py-3 text-sm font-medium text-destructive hover:bg-destructive/10 active:scale-[0.98] transition-all"
+              >
+                Disconnect
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Not connected ── */}
+      {ble.bleSupported && !ble.connected && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex flex-col gap-4"
+        >
+          {/* How it works card */}
+          <div className="rounded-2xl border border-border bg-card p-5">
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3">
+              How to connect
+            </p>
+            <div className="space-y-3">
+              {[
+                { icon: Zap,              text: "Power on your Smart LCR Meter" },
+                { icon: BluetoothSearching, text: "Tap the button below — your browser will show a device picker" },
+                { icon: Bluetooth,        text: "Select your HM-10 module from the list" },
+                { icon: CheckCircle2,     text: "Connection is maintained across all pages" },
+              ].map(({ icon: Icon, text }, i) => (
+                <div key={i} className="flex items-start gap-3">
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-primary/20 bg-primary/10 mt-0.5">
+                    <Icon className="h-3 w-3 text-primary" />
+                  </div>
+                  <p className="text-xs text-muted-foreground">{text}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Browser compatibility note */}
+          <div className="flex items-start gap-2.5 rounded-xl border border-mosfet/20 bg-mosfet/5 px-4 py-3">
+            <AlertCircle className="h-4 w-4 text-mosfet mt-0.5 shrink-0" />
+            <p className="text-xs text-muted-foreground">
+              Web Bluetooth requires <strong className="text-foreground">Chrome or Edge</strong> on desktop or Android.
+              The device picker is controlled by your browser — not this app.
+            </p>
+          </div>
+
+          {/* Connect button — ble.connect() MUST be called from a user click */}
+          <button
+            onClick={() => void ble.connect()}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary py-4 text-base font-bold text-primary-foreground shadow-lg hover:bg-primary/90 active:scale-[0.98] transition-all"
+          >
+            <Bluetooth className="h-5 w-5" />
+            Connect to Smart LCR Meter
+          </button>
+
+          <p className="text-center text-[10px] text-muted-foreground/60">
+            A browser device-picker will open. Select your HM-10 module to pair.
+          </p>
+        </motion.div>
+      )}
     </div>
   );
 };
